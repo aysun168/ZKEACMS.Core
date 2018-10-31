@@ -1,4 +1,5 @@
 @echo off
+cd /d %~dp0
 REM:请根据您的个人实际情况修改以下信息：
 REM:如果您运行该批处理时出现乱码或者执行不成功，请参考
 REM:http://www.zkea.net/zkeacms/document/issues
@@ -23,10 +24,7 @@ set /P dbUserId=3.输入数据库用户名，默认(sa):
 if "%dbUserId%"=="" set dbUserId=sa
 set /P dbPassword=4.输入数据库密码，默认(sa):
 if "%dbPassword%"=="" set dbPassword=sa
-set dbPath=%cd%\App_Data
-if not exist "%dbPath%" (
-mkdir "%dbPath%"
-)
+
 @echo 创建数据库可能要花一点时间，请稍后...
 @echo Creating DataBase %dataBase%
 sqlcmd -S %server% -d master -U %dbUserId% -P %dbPassword% -b -i "CreateDataBase.sql"
@@ -213,6 +211,9 @@ if %ERRORLEVEL% NEQ 0 goto errors
 @echo Comments
 sqlcmd -x -S %server% -d %dataBase% -U %dbUserId% -P %dbPassword% -b -i "Tables\dbo.Comments.Table.sql"
 if %ERRORLEVEL% NEQ 0 goto errors
+@echo Rule
+sqlcmd -x -S %server% -d %dataBase% -U %dbUserId% -P %dbPassword% -b -i "Tables\dbo.CMS_Rule.Table.sql"
+if %ERRORLEVEL% NEQ 0 goto errors
 
 @echo InitailData...
 @echo ArticleType
@@ -394,6 +395,9 @@ sqlcmd -x -S %server% -d %dataBase% -U %dbUserId% -P %dbPassword% -b -i "Initial
 if %ERRORLEVEL% NEQ 0 goto errors
 @echo Comments
 sqlcmd -x -S %server% -d %dataBase% -U %dbUserId% -P %dbPassword% -b -i "InitialData\dbo.Comments.Table.sql"
+if %ERRORLEVEL% NEQ 0 goto errors
+@echo Rule
+sqlcmd -x -S %server% -d %dataBase% -U %dbUserId% -P %dbPassword% -b -i "InitialData\dbo.CMS_Rule.Table.sql"
 if %ERRORLEVEL% NEQ 0 goto errors
 
 @echo -----------------------------------------------------------------------------

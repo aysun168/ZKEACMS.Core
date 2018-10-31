@@ -23,7 +23,7 @@ namespace ZKEACMS.Common.Service
         {
             _navigationService = navigationService;
         }
-
+        public override DbSet<NavigationWidget> CurrentDbSet => (DbContext as CMSDbContext).NavigationWidget;
         public override WidgetViewModelPart Display(WidgetBase widget, ActionContext actionContext)
         {
             var currentWidget = widget as NavigationWidget;
@@ -32,6 +32,14 @@ namespace ZKEACMS.Common.Service
             if (actionContext is ActionExecutedContext)
             {
                 string path = actionContext.HttpContext.Request.Path.Value.ToLower();
+                if (ApplicationContext.As<CMSApplicationContext>().IsDesignMode)
+                {
+                    var layout = actionContext.HttpContext.GetLayout();
+                    if (layout != null && layout.Page != null)
+                    {
+                        path = layout.Page.Url.Replace("~/", "/");
+                    }
+                }
                 NavigationEntity current = null;
                 int length = 0;
                 IUrlHelper urlHelper = ((actionContext as ActionExecutedContext).Controller as Controller).Url;

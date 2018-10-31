@@ -1,4 +1,4 @@
-/* http://www.zkea.net/ 
+ï»¿/* http://www.zkea.net/ 
  * Copyright 2018 ZKEASOFT 
  * http://www.zkea.net/licenses 
  */
@@ -15,22 +15,41 @@ using ZKEACMS.DataArchived;
 using ZKEACMS.ExtendField;
 using ZKEACMS.Widget;
 using Microsoft.EntityFrameworkCore;
+using ZKEACMS.Zone;
+using ZKEACMS.Layout;
+using Microsoft.AspNetCore.Http;
 
 namespace ZKEACMS.Page
 {
     public class PageService : ServiceBase<PageEntity>, IPageService
     {
         private readonly IWidgetBasePartService _widgetService;
+        private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly IWidgetActivator _widgetActivator;
+        private readonly IZoneService _zoneService;
+        private readonly ILayoutHtmlService _layoutHtmlService;
 
-
-        public PageService(IWidgetBasePartService widgetService, IApplicationContext applicationContext, IWidgetActivator widgetActivator, CMSDbContext dbContext)
+        public PageService(IWidgetBasePartService widgetService,
+            IApplicationContext applicationContext,
+            IHttpContextAccessor httpContextAccessor,
+            IWidgetActivator widgetActivator,
+            IZoneService zoneService,
+            ILayoutHtmlService layoutHtmlService,
+            CMSDbContext dbContext)
             : base(applicationContext, dbContext)
         {
             _widgetService = widgetService;
+            _httpContextAccessor = httpContextAccessor;
             _widgetActivator = widgetActivator;
+            _zoneService = zoneService;
+            _layoutHtmlService = layoutHtmlService;
         }
 
+        public override DbSet<PageEntity> CurrentDbSet
+        {
+            get { return (DbContext as CMSDbContext).Page; }
+        }
+        
         public override ServiceResult<PageEntity> Add(PageEntity item)
         {
             if (!item.IsPublishedPage && Count(m => m.Url == item.Url && m.IsPublishedPage == false) > 0)
@@ -57,16 +76,16 @@ namespace ZKEACMS.Page
 
         public void Publish(PageEntity item)
         {
+            string pageId = item.ID;
             BeginTransaction(() =>
             {
-                item = Get(item.ID);
                 item.IsPublish = true;
                 item.PublishDate = DateTime.Now;
                 base.Update(item);
 
-                //Remove(m => m.ReferencePageID == item.ID && m.IsPublishedPage == true);
+                var zones = _zoneService.GetByPage(item);
+                var layoutHtmls = _layoutHtmlService.GetByPage(item);
 
-                _widgetService.RemoveCache(item.ID);
 
                 item.ReferencePageID = item.ID;
                 item.IsPublishedPage = true;
@@ -74,6 +93,16 @@ namespace ZKEACMS.Page
 
                 var widgets = _widgetService.GetByPageId(item.ID);
                 Add(item);
+                zones.Each(m =>
+                {
+                    m.PageId = item.ID;
+                    _zoneService.Add(m);
+                });
+                layoutHtmls.Each(m =>
+                {
+                    m.PageId = item.ID;
+                    _layoutHtmlService.Add(m);
+                });
                 widgets.Each(m =>
                 {
                     using (var widgetService = _widgetActivator.Create(m))
@@ -85,6 +114,18 @@ namespace ZKEACMS.Page
                     }
                 });
             });
+            const int keepVersions = 6;
+            var allPublishedVersion = Get(m => m.ReferencePageID == pageId && m.IsPublishedPage == true).OrderByDescending(m => m.PublishDate).ToList();
+            if (allPublishedVersion.Count > keepVersions)
+            {
+                for (int i = keepVersions; i < allPublishedVersion.Count; i++)
+                {
+                    DeleteVersion(allPublishedVersion[i].ID);
+                }
+            }
+            _widgetService.RemoveCache(pageId);
+            _zoneService.RemoveCache(pageId);
+            _layoutHtmlService.RemoveCache(pageId);
         }
         public void Revert(string ID, bool RetainLatest)
         {
@@ -96,6 +137,7 @@ namespace ZKEACMS.Page
                     var refPage = Get(page.ReferencePageID);
                     refPage.IsPublish = false;
                     Update(refPage);
+                    page.Description = "ä»Ž {0:yyyy/MM/dd H:mm} ç‰ˆæœ¬æ’¤å›ž".FormatWith(page.PublishDate);
                     page.PublishDate = DateTime.Now;
                     Add(page);
 
@@ -110,7 +152,19 @@ namespace ZKEACMS.Page
                     });
                     _widgetService.RemoveCache(page.ReferencePageID);
                     if (!RetainLatest)
-                    {//Çå¿Õµ±Ç°µÄËùÓÐÐÞ¸Ä
+                    {//æ¸…ç©ºå½“å‰çš„æ‰€æœ‰ä¿®æ”¹
+
+                        _layoutHtmlService.Remove(m => m.PageId == page.ReferencePageID);
+                        _zoneService.Remove(m => m.PageId == page.ReferencePageID);
+                        _layoutHtmlService.GetByPage(page).Each(m =>
+                        {
+                            _layoutHtmlService.Add(new LayoutHtml { LayoutId = m.LayoutId, Html = m.Html, PageId = page.ReferencePageID });
+                        });
+                        _zoneService.GetByPage(page).Each(m =>
+                        {
+                            m.PageId = page.ReferencePageID;
+                            _zoneService.Add(m);
+                        });
                         _widgetService.GetByPageId(page.ReferencePageID).Each(m =>
                         {
                             var widgetService = _widgetActivator.Create(m);
@@ -126,6 +180,9 @@ namespace ZKEACMS.Page
                             widgetService.Publish(m);
                         });
                     }
+
+                    _zoneService.RemoveCache(page.ReferencePageID);
+                    _layoutHtmlService.RemoveCache(page.ReferencePageID);
                 }
             });
 
@@ -134,6 +191,9 @@ namespace ZKEACMS.Page
         public override void Remove(PageEntity item)
         {
             Remove(m => m.ID == item.ID);
+            _widgetService.RemoveCache(item.ID);
+            _zoneService.RemoveCache(item.ID);
+            _layoutHtmlService.RemoveCache(item.ID);
         }
 
         public override void Remove(Expression<Func<PageEntity, bool>> filter)
@@ -161,6 +221,9 @@ namespace ZKEACMS.Page
                             widgetService.DeleteWidget(m.ID);
                         }
                     });
+
+                    _layoutHtmlService.Remove(m => allPageIds.Contains(m.PageId));
+                    _zoneService.Remove(m => allPageIds.Contains(m.PageId));
 
                     allPages.Each(p => _widgetService.RemoveCache(p.ID));
 
@@ -241,28 +304,18 @@ namespace ZKEACMS.Page
             }
             if (path == "/")
             {
-                path = "/index";
+                path = "~/index";
             }
-            if (!path.StartsWith("~"))
+            else
             {
-                path = "~" + path;
+                path = $"~{path}";
             }
-            var result = CurrentDbSet.AsNoTracking()
-                .Where(m => m.Url == path && m.IsPublishedPage == !isPreView)
-                .OrderByDescending(m => m.PublishDate)
-                .FirstOrDefault();
 
-            //if (result != null && result.ExtendFields != null)
-            //{
-            //    /*!
-            //     * http://www.zkea.net/ 
-            //     * Copyright 2017 ZKEASOFT 
-            //     * http://www.zkea.net/licenses 
-            //     */
-            //    ((List<ExtendFieldEntity>)result.ExtendFields).Add(new ExtendFieldEntity { Title = "meta_support", Value = "ZKEASOFT" });
-            //}
-            return result;
 
+            return Get()
+                      .Where(m => m.Url == path && m.IsPublishedPage == !isPreView)
+                      .OrderByDescending(m => m.PublishDate)
+                      .FirstOrDefault();
         }
 
         public void MarkChanged(string pageId)

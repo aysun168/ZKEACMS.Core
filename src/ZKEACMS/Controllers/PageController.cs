@@ -20,28 +20,29 @@ using ZKEACMS.Page;
 using ZKEACMS.Setting;
 using ZKEACMS.Widget;
 using ZKEACMS.Zone;
+using ZKEACMS.Rule;
 
 namespace ZKEACMS.Controllers
 {
     public class PageController : BasicController<PageEntity, string, IPageService>
     {
         private readonly ICookie _cookie;
-        private readonly IZoneService _zoneService;
         private readonly ILayoutService _layoutService;
         private readonly IWidgetBasePartService _widgetService;
+        private readonly IRuleService _ruleService;
         private readonly IApplicationSettingService _applicationSettingService;
         public PageController(IPageService service,
             ICookie cookie,
-            IZoneService zoneService,
             ILayoutService layoutService,
             IWidgetBasePartService widgetService,
+            IRuleService ruleService,
             IApplicationSettingService applicationSettingService)
             : base(service)
         {
             _cookie = cookie;
-            _zoneService = zoneService;
             _layoutService = layoutService;
             _widgetService = widgetService;
+            _ruleService = ruleService;
             _applicationSettingService = applicationSettingService;
         }
         [Widget]
@@ -86,12 +87,14 @@ namespace ZKEACMS.Controllers
             {
                 page.Url += "/";
             }
+            ViewBag.Page = page;
             return View(page);
 
         }
         [HttpPost, DefaultAuthorize(Policy = PermissionKeys.ManagePage)]
         public override IActionResult Create(PageEntity entity)
         {
+            ViewBag.Page = entity;
             if (ModelState.IsValid)
             {
                 try
@@ -116,13 +119,21 @@ namespace ZKEACMS.Controllers
                 return RedirectToAction("Index");
             }
             ViewBag.OldVersions = Service.Get(m => m.ReferencePageID == page.ID && m.IsPublishedPage == true).OrderBy(m => m.PublishDate);
+            ViewBag.Page = page;
             return View(page);
         }
         [HttpPost, DefaultAuthorize(Policy = PermissionKeys.ManagePage)]
         public override IActionResult Edit(PageEntity entity)
         {
+            ViewBag.OldVersions = Service.Get(m => m.ReferencePageID == entity.ID && m.IsPublishedPage == true).OrderBy(m => m.PublishDate);
+            ViewBag.Page = entity;
+            if (!ModelState.IsValid)
+            {
+                return View(entity);
+            }
             try
             {
+                ViewBag.Page = entity;
                 Service.Update(entity);
             }
             catch (PageExistException ex)
@@ -134,26 +145,21 @@ namespace ZKEACMS.Controllers
             {
                 return RedirectToAction("Design", new { entity.ID });
             }
-            string id = entity.ID;
-            if (entity.ActionType == ActionType.Delete)
+            else if (entity.ActionType == ActionType.Delete)
             {
-                Service.Remove(id);
+                Service.Remove(entity);
                 return RedirectToAction("Index");
             }
-            if (entity.ActionType == ActionType.Publish)
+            else if (entity.ActionType == ActionType.Publish)
             {
                 Service.Publish(entity);
+                return RedirectView(entity.ID, false);
             }
-            return RedirectToAction("Index", new { PageID = id });
+            return RedirectToAction("Index", new { PageID = entity.ID });
         }
         [EditWidget, DefaultAuthorize(Policy = PermissionKeys.ManagePage)]
         public IActionResult Design(string ID)
         {
-            // Stop Caching in IE
-
-
-            // Stop Caching in Firefox
-
             ViewBag.CanPasteWidget = _cookie.GetValue<string>(Const.CopyWidgetCookie).IsNotNullAndWhiteSpace();
             return View();
         }
@@ -201,17 +207,38 @@ namespace ZKEACMS.Controllers
         public IActionResult PageZones(QueryContext context)
         {
             var page = Service.Get(context.PageID);
-            var layout = _layoutService.Get(page.LayoutId);
+            var layout = _layoutService.GetByPage(page);
             var viewModel = new LayoutZonesViewModel
             {
                 Page = page,
                 Layout = layout,
                 PageID = context.PageID,
                 LayoutID = layout.ID,
-                Zones = _zoneService.GetZonesByPageId(context.PageID),
-                Widgets = _widgetService.GetAllByPage(Service.Get(context.PageID)),
+                Zones = layout.Zones,
+                Widgets = _widgetService.GetAllByPage(page),
                 LayoutHtml = layout.Html
             };
+            var rules = _ruleService.GetMatchRule(new RuleWorkContext
+            {
+                Url = Url.Content(page.Url),
+                UserAgent = Request.Headers["User-Agent"]
+            });
+            if (rules.Any())
+            {
+                var rulesID = rules.Select(m => m.RuleID).ToArray();
+                var ruleWidgets = _widgetService.GetAllByRule(rulesID);
+                ruleWidgets.Each(widget =>
+                {
+                    var zone = layout.Zones.FirstOrDefault(z => z.ZoneName == rules.First(m => m.RuleID == widget.RuleID).ZoneName);
+                    if (zone != null)
+                    {
+                        widget.ZoneID = zone.HeadingCode;
+                    }
+                });
+                viewModel.Widgets = viewModel.Widgets.Concat(ruleWidgets);
+            }
+
+
             return View(viewModel);
         }
         [HttpPost, DefaultAuthorize(Policy = PermissionKeys.ManagePage)]
